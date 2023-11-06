@@ -12,6 +12,7 @@ class LatticeBoltzmannSimulator:
     def initialize_grid(self):
         grid=self.grid
         #f distribution function here, also need to define d2q9
+        f_initial=torch.zeros_like(grid)
         pass
 
     def collision_step(self):
