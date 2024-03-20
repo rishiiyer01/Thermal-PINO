@@ -88,7 +88,7 @@ class FNO2d(nn.Module):
         self.padding = 16 # pad the domain if input is non-periodic
 
         self.fc0 = nn.Linear(4, self.width)  
-
+        
         self.conv0 = SpectralConv2d(self.width, self.width, self.modes1, self.modes2)
         self.conv1 = SpectralConv2d(self.width, self.width, self.modes1, self.modes2)
         self.conv2 = SpectralConv2d(self.width, self.width, self.modes1, self.modes2)
