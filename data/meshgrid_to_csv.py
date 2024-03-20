@@ -16,4 +16,4 @@ points = np.stack((randPipeX.flatten(), randPipeY.flatten()), axis=-1)
 # Save the points to a CSV file
 np.savetxt("meshgrid.csv", points, delimiter=",", fmt="%.6f")
 
-#I moved the csv to the relevant openfoam dir
+#I moved the csv to the relevant openfoam dir, you have to download data from google drive
