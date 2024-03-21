@@ -1,0 +1,27 @@
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      surfaceFeaturesDict;
+}
+
+meshgrid
+{
+    surfaces
+    (
+        "meshgrid.stl"
+    );
+
+    includedAngle 150;
+
+    subsetFeatures
+    {
+        nonManifoldEdges yes;
+        openEdges         yes;
+    }
+
+    // Write options
+    writeObj     yes;
+    writeVTK     no;
+}

@@ -58,7 +58,7 @@ boundary
     }
     frontAndBack
     {
-        type empty;
+        type symmetry;
         faces
         (
             (0 3 2 1)

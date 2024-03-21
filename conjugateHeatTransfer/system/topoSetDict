@@ -9,32 +9,20 @@ FoamFile
 actions
 (
     {
-        name    meshgridPoints;
-        type    pointSet;
-        action  new;
-        source  labelToPoint;
-        value   #include "meshgrid.csv";
-    }
-    {
-        name    meshgridFaces;
-        type    faceSet;
-        action  new;
-        source  pointToFace;
-        sourceInfo
-        {
-            set     meshgridPoints;
-            option  all;
-        }
-    }
-    {
         name    meshgridCells;
         type    cellSet;
         action  new;
-        source  faceToCell;
+        source  surfaceToCell;
         sourceInfo
         {
-            set     meshgridFaces;
-            option  any;
+            file    "meshgrid.stl";
+            useSurfaceOrientation false;
+            outsidePoints ((0 0 0));
+            includeCut     false;
+            includeInside  true;
+            includeOutside false;
+            nearDistance   -1;
+            curvature      -100;
         }
     }
 );

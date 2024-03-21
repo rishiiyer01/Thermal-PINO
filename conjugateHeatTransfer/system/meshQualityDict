@@ -1,0 +1,67 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+| =========                 |                                                 |
+| \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox           |
+|  \\    /   O peration     | Version:  2.4.0                                 |
+|   \\  /    A nd           | Web:      www.OpenFOAM.org                      |
+|    \\/     M anipulation  |                                                 |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      meshQualityDict;
+}
+
+// Minimum length allowed for surface edges (relative to bounding box)
+minTwist        1e-3;
+
+// Maximum non-orthogonality allowed (expressed as a vector)
+// Non-orthogonality for face-face is calculated from
+// cos(vectorA.vectorB), where vectorA and vectorB are
+// the area vectors for the neighbouring faces
+maxNonOrtho     65;
+
+// Max skewness allowed (angle between face areas and face normal
+// vectors)
+maxBoundarySkewness 20;
+maxInternalSkewness  4;
+
+// Max concavity (concave angle) allowed. This is angle (in degrees)
+// between face area and face normal vector
+maxConcave      30;
+
+// Booleans to deactivate checks
+nFeatureAngle   100;
+//allowQuadrilateralFaces yes;
+
+// Advanced
+nSmoothNormals  3;
+errorReduction  0.75;
+
+// Write intermediate meshes/VTK
+meshPhi         35;
+
+// Optionally write mesh quality stats as a cloud of isotropic sizes
+dumpRegionStats false;
+meshRegionsUnique
+{
+    "internalMeshRegions"
+    {
+        maxNonOrtho  65;
+        maxBoundarySkewness  20;
+        maxInternalSkewness  4;
+        maxConcave   30;
+        minFlatness  0.05;
+        minVol       1e-13;
+        minTetQuality 1e-30;
+        minArea      -1;
+        minTwist     0.02;
+        minDeterminant 0.001;
+        minFaceWeight 0.05;
+        minVolRatio  0.01;
+        minTriangleTwist -1;
+        nSmoothScale 4;
+        errorReduction 0.75;
+    }
+}
