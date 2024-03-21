@@ -9,10 +9,32 @@ FoamFile
 actions
 (
     {
+        name    meshgridPoints;
+        type    pointSet;
+        action  new;
+        source  labelToPoint;
+        value   #include "meshgrid.csv";
+    }
+    {
+        name    meshgridFaces;
+        type    faceSet;
+        action  new;
+        source  pointToFace;
+        sourceInfo
+        {
+            set     meshgridPoints;
+            option  all;
+        }
+    }
+    {
         name    meshgridCells;
         type    cellSet;
         action  new;
-        source  pointsToCell;
-        points  (#include "meshgrid.csv");
+        source  faceToCell;
+        sourceInfo
+        {
+            set     meshgridFaces;
+            option  any;
+        }
     }
 );
