@@ -1,3 +1,4 @@
+#script generates meshgrid csv compatible with openfoam
 import numpy as np
 
 # Load your meshgrid data
@@ -17,8 +18,7 @@ cell_centers_x = randPipeX + cell_size_x / 2
 cell_centers_y = randPipeY + cell_size_y / 2
 
 # Stack the X and Y coordinates of cell centers
-cell_centers = np.stack((cell_centers_x.flatten(), cell_centers_y.flatten()), axis=-1)
+cell_centers = np.stack((cell_centers_x.flatten(), cell_centers_y.flatten(), np.zeros_like(cell_centers_x.flatten())), axis=-1)
 
-# Save the points to a CSV file
-np.savetxt("/home/iyer.ris/Thermal-PINO/conjugateHeatTransfer/system/meshgrid.csv", cell_centers, delimiter=",", fmt="%.6f")
-
+# Save the points to a CSV file in OpenFOAM format
+np.savetxt("/home/iyer.ris/Thermal-PINO/conjugateHeatTransfer/system/meshgrid.csv", cell_centers, delimiter=' ', fmt='(%.6f %.6f %.6f)')
