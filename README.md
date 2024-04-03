@@ -1,8 +1,5 @@
 # Thermal-PINO
-Here, we are using physics informed neural operator to accelerate simulations in the complete absence of data. We are trying to generalize across parameters and geometries of the conjugate heat transfer problem using a variety of methods:
-1. Lattice Boltzmann and SIMPLE-NS PINO
-   a. As of right now, I support the iterative SIMPLE algorithm for channel flows of varying geometries. It is fully differentiable, so it is considered a physics informed loss with the benefits of data based losses.
-3. Utilizing iterative based algorithms that use the neural operator ansatz to initialize the distribution, then computing the loss based on the difference between the initialization and the converged solution, which is faster than generating the data separately.
+Here, we are using physics informed neural operator to accelerate simulations for conjugate heat transfer problems. This requires passing a signed distance field or a mask(s) as input to the neural operator to guide the model to understand which parts of the domain are fluid vs solid. For now, we are completing the work for a simple irregular 2d channel of water inside of a 2d block of aluminum surrounded by free convection room temperature air. Data generation is partially from OpenFOAM's chtsolver, and partially from a JAX numerical solver I programmed for situations where the velocity field at steady state is already known. 
 
 
-A fully executable training and inference code is coming soon.
+fully executable training and inference code is coming soon.
