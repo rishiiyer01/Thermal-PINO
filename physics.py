@@ -8,7 +8,7 @@ import operator
 from functools import reduce
 #################################################
 #
-# Utilities
+# physics losses contained in this file
 #
 #################################################
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -212,7 +212,9 @@ class PhysicsLossFFT(nn.Module):
         L = torch.norm(L_mom_u + L_mom_v+2*L_cont+L_heat+bc_loss)
         #print(L)
         return L
-class PhysicsLossSIM(nn.module):
+
+
+class PhysicsLossSIM(nn.Module):
     def __init__(self,model, alpha=(0.143*10**-6), beta=(1/1000), nu=0.000001):
         super(PhysicsLossSIM, self).__init__()
         self.alpha = alpha
@@ -870,10 +872,8 @@ class RangeNormalizer(object):
 class LpLoss(object):
     def __init__(self, d=2, p=2, size_average=True, reduction=True):
         super(LpLoss, self).__init__()
-
-        #Dimension and Lp-norm type are postive
+        # Dimension and Lp-norm type are positive
         assert d > 0 and p > 0
-
         self.d = d
         self.p = p
         self.reduction = reduction
@@ -881,36 +881,29 @@ class LpLoss(object):
 
     def abs(self, x, y):
         num_examples = x.size()[0]
-
-        #Assume uniform mesh
+        # Assume uniform mesh
         h = 1.0 / (x.size()[1] - 1.0)
-
         all_norms = (h**(self.d/self.p))*torch.norm(x.reshape(num_examples,-1) - y.reshape(num_examples,-1), self.p, 1)
-
         if self.reduction:
             if self.size_average:
                 return torch.mean(all_norms)
             else:
                 return torch.sum(all_norms)
-
         return all_norms
 
     def rel(self, x, y):
         num_examples = x.size()[0]
-
         diff_norms = torch.norm(x.reshape(num_examples,-1) - y.reshape(num_examples,-1), self.p, 1)
         y_norms = torch.norm(y.reshape(num_examples,-1), self.p, 1)
-
         if self.reduction:
             if self.size_average:
                 return torch.mean(diff_norms/y_norms)
             else:
                 return torch.sum(diff_norms/y_norms)
-
         return diff_norms/y_norms
 
     def __call__(self, x, y):
-        return self.rel(x, y)
+        return self.rel(x, y)  # Use absolute error instead of relative error
 
 # A simple feedforward neural network
 class DenseNet(torch.nn.Module):
