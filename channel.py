@@ -2,6 +2,7 @@
 import os
 #os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
 #THIS CODE IS NOT FULLY OPERATIONAL
+import numpy as np
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
 from timeit import default_timer
@@ -10,6 +11,7 @@ sys.path.append('../')
 from physics import *
 from Adam import Adam
 import torch
+import torch.nn as nn
 if torch.cuda.is_available():
     print("CUDA is available!")
 else:
@@ -190,29 +192,43 @@ width = 24
 
 r1 = 1
 r2 = 1
-s1 = int(((129 - 1) / r1) + 1)
-s2 = int(((129 - 1) / r2) + 1)
+s1 = int(((100 - 1) / r1) + 1)
+s2 = int(((100 - 1) / r2) + 1)
 
-inputX = np.load(INPUT_X)
-inputX = torch.tensor(inputX, dtype=torch.float)
-inputY = np.load(INPUT_Y)
+inputX = np.load('/home/iyer.ris/inputx.npy')
+#inputX = torch.tensor(inputX, dtype=torch.float)
+inputY = np.load('/home/iyer.ris/inputy.npy')
 diameter = 1.0  # pipe diameter
 radius = diameter / 2.0  # pipe radius
-num_points = 129  # number of grid points
+num_points = 100  # number of grid points
 # Generate evenly spaced points in the Y dimension
 y_values = np.linspace(-radius, radius, num_points)
 x_values=np.linspace(0,10,num_points)
 # Repeat these points in the X dimension
-
-Y_data1 = np.tile(y_values, (num_points, 1))
-Y_data1 = np.repeat(Y_data1[np.newaxis, :, :], 2310, axis=0)
-
+#inputY = torch.tensor(inputY, dtype=torch.float)
+#Y_data1 = np.tile(y_values, (num_points, 1))
+Y_data1 = np.repeat(inputY[np.newaxis, :, :], 2310, axis=0)
+inputX=torch.tensor(np.repeat(inputX[np.newaxis, :, :], 2310, axis=0))
 inputY = torch.tensor(Y_data1, dtype=torch.float)
+
 
 input = torch.stack([inputX, inputY], dim=-1)
 
-#output = np.load(OUTPUT_Sigma)
-output = torch.tensor(torch.zeros_like(inputY.clone().detach()), dtype=torch.float)
+output1 = np.load('/home/iyer.ris/outputv.npy')
+output1 = torch.tensor(np.repeat(output1[np.newaxis, :, :], 2310, axis=0))
+output2 = np.load('/home/iyer.ris/outputp.npy')
+output2 = torch.tensor(np.repeat(output2[np.newaxis, :, :], 2310, axis=0))
+output2=torch.unsqueeze(output2,axis=-1)
+output3 = np.load('/home/iyer.ris/outputT.npy')
+output3 = torch.tensor(np.repeat(output3[np.newaxis, :, :], 2310, axis=0))
+output3=torch.unsqueeze(output3,axis=-1)
+print("Shape of output1:", output1.shape)
+print("Shape of output2:", output2.shape)
+print("Shape of output3:", output3.shape)
+output_stacked = torch.stack([output2, output3], dim=3).squeeze()
+print(output_stacked.shape)
+output = torch.cat([output1, output_stacked], dim=3)
+print(output.shape,input.shape)
 
 x_train = input[:N][:ntrain, ::r1, ::r2][:, :s1, :s2]
 y_train = output[:N][:ntrain, ::r1, ::r2][:, :s1, :s2]
@@ -239,53 +255,49 @@ scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=step_size, gamm
 
 myloss = LpLoss(size_average=False)
 #physics_loss = PhysicsLossFFT(model).to(device)
-physics_loss=PhysicsLoss(model).to(device)
-
+#physics_loss=PhysicsLoss(model).to(device)
 for ep in range(epochs):
     model.train()
     t1 = default_timer()
     train_l2 = 0
     for x, y in train_loader:
         x, y = x.to(device), y.to(device)
-        x.requires_grad = True  # Add this line
+        x.requires_grad = True
         
-        #print(x.shape)
         optimizer.zero_grad()
         u, v, p, T = model(x)
         
+        # Concatenate the model outputs along the last dimension
+        output = torch.cat((u, v, p, T), dim=-1)
         
-        
-        #grid.requires_grad=True
-        #loss = myloss(u.view(batch_size, -1), y.view(batch_size, -1))
-        #print(x.shape)
-
-        loss=physics_loss(x) 
-        #print(y.shape,out.shape)
+        loss = myloss(output.view(batch_size, -1), y.view(batch_size, -1))
         loss.backward()
-
+        
         optimizer.step()
         train_l2 += loss.item()
-
+    
     scheduler.step()
-
+    
     model.eval()
     test_l2 = 0.0
     
     for x, y in test_loader:
         x, y = x.to(device), y.to(device)
         x.requires_grad = True
-        u, v, p, T= model(x)
-
-        test_l2 += physics_loss(x).item()
+        u, v, p, T = model(x)
+        
+        # Concatenate the model outputs along the last dimension
+        output = torch.cat((u, v, p, T), dim=-1)
+        
+        test_l2 += myloss(output.view(batch_size, -1), y.view(batch_size, -1)).item()
+    
     train_l2 /= ntrain
     test_l2 /= ntest
-
+    
     t2 = default_timer()
     print(ep, t2 - t1, train_l2, test_l2)
-
-    if ep%step_size==0:
-        torch.save(model, '/home/iyer.ris/everything/Geo-FNO-thermal/pipe/pipemodelrun_' + str(ep))
-       
-
+    
+    if ep % step_size == 0:
+        torch.save(model, '/home/iyer.ris/pipe/pipemodelrun_' + str(ep))
 
 
