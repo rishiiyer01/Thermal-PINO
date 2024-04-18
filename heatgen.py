@@ -16,8 +16,10 @@ import time
 class Heat_eq_generation():
     def __init__(self, x_channel, y_channel, velocity_data, domain_size, grid_res):
         start_time=time.time()
-        self.x_channel = x_channel
-        self.y_channel = y_channel
+        
+        self.x_channel = jax.lax.stop_gradient(x_channel)
+        self.y_channel = jax.lax.stop_gradient(y_channel)
+        self.velocity_data=jax.lax.stop_gradient(velocity_data)
         coords_list = []
         for col in np.arange(x_channel.shape[1]):
             coords_list = coords_list + list(zip(x_channel[col, :], y_channel[col, :]))
@@ -47,7 +49,7 @@ class Heat_eq_generation():
         
         self.assemble_coefficients_matrix_vmapped = self.assemble_coefficients_matrix
         self.apply_boundary_conditions_vmapped = self.apply_boundary_conditions
-        self.T = self.solve_steady_state(jax.lax.stop_gradient(alpha_field), jax.lax.stop_gradient(self.u[:,:,0]), jax.lax.stop_gradient(self.u[:,:,1]), jax.lax.stop_gradient(self.mask), nx, ny, self.dx, self.dy)
+        #self.T = self.solve_steady_state(jax.lax.stop_gradient(alpha_field), jax.lax.stop_gradient(self.u[:,:,0]), jax.lax.stop_gradient(self.u[:,:,1]), jax.lax.stop_gradient(self.mask), nx, ny, self.dx, self.dy)
         
 
     def is_inside_channel(self, x, y):
@@ -230,3 +232,66 @@ class Heat_eq_generation():
         end_time = time.time()
         print(f"solution time: {end_time - start_time} seconds")
         return T
+
+
+
+import torch
+
+X_data = np.load("/home/iyer.ris/Pipe_X.npy")
+Y_data = np.load("/home/iyer.ris/Pipe_Y.npy")
+velocity_data=np.load("/home/iyer.ris/pipe/Pipe_Q.npy")
+randPipeX = X_data[45]
+randPipeY = Y_data[45]
+randQ=velocity_data[45]
+print(randQ.shape)
+#print(randPipeX[20,0],randPipeY[20,0],randQ[2,-1,:])
+print(jax.devices())
+
+input_x=torch.tensor(X_data)
+input_y=torch.tensor(Y_data)
+print(input_x.shape,input_y.shape)
+input_x.unsqueeze(1)
+input_y.unsqueeze(1)
+INPUT=torch.stack((input_x,input_y),dim=1)
+print(INPUT.shape)
+velocities=torch.tensor(velocity_data)
+print(velocities.shape)
+data_loader = torch.utils.data.DataLoader(torch.utils.data.TensorDataset(INPUT, velocities), batch_size=2, shuffle=False)
+def compute_steady_state(heat_eq_obj):
+    return heat_eq_obj.solve_steady_state(
+        jax.lax.stop_gradient(heat_eq_obj.alpha_field),
+        jax.lax.stop_gradient(heat_eq_obj.u[:, :, 0]),
+        jax.lax.stop_gradient(heat_eq_obj.u[:, :, 1]),
+        jax.lax.stop_gradient(heat_eq_obj.mask),
+        jnp.array(heat_eq_obj.xgrid.shape[0]),
+        jnp.array(heat_eq_obj.xgrid.shape[1]),
+        jnp.array(heat_eq_obj.dx),  # Convert dx to a JAX array
+        jnp.array(heat_eq_obj.dy),  # Convert dy to a JAX array
+    )
+def build_kdtree(x_channel, y_channel):
+    coords_list = []
+    for col in np.arange(x_channel.shape[1]):
+        coords_list = coords_list + list(zip(x_channel[col, :], y_channel[col, :]))
+    coords = np.array(coords_list)
+    return KDTree(coords)
+for batch_input, batch_velocities in data_loader:
+    batch_size = batch_input.shape[0]
+    
+    # Extract the necessary inputs for each mesh in the batch
+    x_channels = batch_input[:, 0].numpy()
+    y_channels = batch_input[:, 1].numpy()
+    velocity_data = batch_velocities.numpy()
+    
+    # Assuming domain_size and grid_res are the same for all meshes
+    domain_size = (10, 2.0)  # Example domain size
+    grid_res = (100, 100)  # Example grid resolution
+    
+    # Create instances of Heat_eq_generation for each mesh in the batch
+    heat_eq_objs = [Heat_eq_generation(x, y, v, domain_size, grid_res) for x, y, v in zip(x_channels, y_channels, velocity_data)]
+    
+    # Convert the list of Heat_eq_generation objects to a JAX array
+    heat_eq_objs_array = jax.tree_util.tree_map(lambda x: x, heat_eq_objs)
+    
+    # Use jax.vmap to compute solve_steady_state batchwise
+    compute_steady_state_batch = jax.vmap(compute_steady_state)
+    results = compute_steady_state_batch(heat_eq_objs_array)
