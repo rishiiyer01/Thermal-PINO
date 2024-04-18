@@ -5,17 +5,17 @@ from jax import jit, grad, vmap
 from scipy.spatial import KDTree
 from jax.experimental import sparse
 import jax
-
+from functools import partial
 import os
 os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
-#jit had a few bugs that I couldn't fix, performance is decent without it
-jax.config.update("jax_disable_jit", True)
-#os.environ['JAX_PLATFORM_NAME'] = 'cpu'
+
+import time
 
 
 #class for generating heat eq solution based on aluminum and liquid water inlet, bcs are not configurable at this stage
 class Heat_eq_generation():
     def __init__(self, x_channel, y_channel, velocity_data, domain_size, grid_res):
+        start_time=time.time()
         self.x_channel = x_channel
         self.y_channel = y_channel
         coords_list = []
@@ -31,18 +31,24 @@ class Heat_eq_generation():
         self.dx = Lx / Nx
         self.dy = 2 * Ly / Ny
         self.xgrid, self.ygrid = jnp.meshgrid(x, y)
+        end_time=time.time()
+        print(f"Initialization time: {end_time - start_time} seconds")
         
-        self.u,self.p = self.interpolate(velocity_data, self.xgrid, self.ygrid)
-        #self.u=self.u*4
+        start_time=time.time()
+        self.u,self.p = self.interpolate(jax.lax.stop_gradient(velocity_data), jax.lax.stop_gradient(self.xgrid), jax.lax.stop_gradient(self.ygrid))
+        self.u=self.u*4
         self.mask = self.map_channel_geometry(self.xgrid, self.ygrid)
         alpha_aluminum = 64 * 10**-6
         alpha_water = 0.143 * 10**-6
         alpha_field = jnp.where(self.mask == True, alpha_water, alpha_aluminum)
+        end_time=time.time()
+        print(f"Interpolation time: {end_time - start_time} seconds")
+
         
         self.assemble_coefficients_matrix_vmapped = self.assemble_coefficients_matrix
         self.apply_boundary_conditions_vmapped = self.apply_boundary_conditions
-        self.T = self.solve_steady_state(alpha_field, self.u[:,:,0], self.u[:,:,1], self.mask, nx, ny, self.dx, self.dy)
-
+        self.T = self.solve_steady_state(jax.lax.stop_gradient(alpha_field), jax.lax.stop_gradient(self.u[:,:,0]), jax.lax.stop_gradient(self.u[:,:,1]), jax.lax.stop_gradient(self.mask), nx, ny, self.dx, self.dy)
+        
 
     def is_inside_channel(self, x, y):
         inside = False
@@ -102,13 +108,19 @@ class Heat_eq_generation():
         return velocity_sum
         
     
+    
     @staticmethod
-    def assemble_coefficients_matrix(alpha_field, velocity_field_x, velocity_field_y, nx, ny, dx, dy):
-        A = jnp.zeros((nx * ny, nx * ny))
+    def assemble_coefficients_matrix(A, alpha_field, velocity_field_x, velocity_field_y, nx, ny, dx, dy, idx_range):
+        alpha_field = jax.lax.stop_gradient(alpha_field)
+        velocity_field_x = jax.lax.stop_gradient(velocity_field_x)
+        velocity_field_y = jax.lax.stop_gradient(velocity_field_y)
         
-        for i in range(1, nx - 1):
-            for j in range(1, ny - 1):
-                #up and down is i, left right is j
+        def body_fun(carry, idx):
+            A = carry
+            i, j = jnp.divmod(idx, ny)
+            A = jax.lax.stop_gradient(A)
+            
+            def true_fn(A):
                 index = j * nx + i
                 
                 # Diffusion terms
@@ -117,68 +129,104 @@ class Heat_eq_generation():
                 A = A.at[index, index + 1].add(alpha_field[i+1, j] / (dy**2))
                 A = A.at[index, index - ny].add(alpha_field[i, j-1] / (dx**2))
                 A = A.at[index, index +ny].add(alpha_field[i, j+1] / (dx**2))
-
-                #eqn: -udotgradT+alpha*graddotgradT=0
+        
                 # Advection terms
                 A = jax.lax.cond(
                     velocity_field_x[i, j] > 0,
-                    lambda: A.at[index, index].add(-velocity_field_x[i, j] / dx).at[index, index - ny].add(velocity_field_x[i, j] / dx),
-                    lambda: A.at[index, index].add(velocity_field_x[i, j] / dx).at[index, index + ny].add(-velocity_field_x[i, j] / dx)
+                    lambda A: A.at[index, index].add(-velocity_field_x[i, j] / dx).at[index, index - ny].add(velocity_field_x[i, j] / dx),
+                    lambda A: A.at[index, index].add(velocity_field_x[i, j] / dx).at[index, index + ny].add(-velocity_field_x[i, j] / dx),
+                    A
                 )
                 
                 A = jax.lax.cond(
                     velocity_field_y[i, j] > 0,
-                    lambda: A.at[index, index].add(-velocity_field_y[i, j] / dy).at[index, index - 1].add(velocity_field_y[i, j] / dy),
-                    lambda: A.at[index, index].add(velocity_field_y[i, j] / dy).at[index, index + 1].add(-velocity_field_y[i, j] / dy)
+                    lambda A: A.at[index, index].add(-velocity_field_y[i, j] / dy).at[index, index - 1].add(velocity_field_y[i, j] / dy),
+                    lambda A: A.at[index, index].add(velocity_field_y[i, j] / dy).at[index, index + 1].add(-velocity_field_y[i, j] / dy),
+                    A
                 )
+                
+                return A
+            
+            def false_fn(A):
+                return A
+            
+            A = jax.lax.cond(
+                jnp.logical_and(i >= 1, jnp.logical_and(i < nx - 1, jnp.logical_and(j >= 1, j < ny - 1))),
+                true_fn,
+                false_fn,
+                A
+            )
+            
+            return A, None
+    
+        A, _ = jax.lax.scan(body_fun, A, idx_range)
         
         return A
         
+    
     @staticmethod
     def apply_boundary_conditions(A, b, mask, nx, ny, dx, dy):
+        # Bottom boundary (i == 0)
+        i = 0
+        for j in range(ny):
+            index = j * nx + i
+            A = A.at[index, index].set(20 / 237 + 1 / dy)
+            A = A.at[index, index + 1].set(20 / 237 - 1 / dy)
+            b = b.at[index].set(400 / 237)
+    
+        # Top boundary (i == nx - 1)
+        i = nx - 1
+        for j in range(ny):
+            index = j * nx + i
+            A = A.at[index, index].set(20 / 237 - 1 / dy)
+            A = A.at[index, index - 1].set(20 / 237 + 1 / dy)
+            b = b.at[index].set(400 / 237)
+    
+        # Left boundary (j == 0)
+        j = 0
         for i in range(nx):
-            for j in range(ny):
-                #up and down is i, left right is j
-                index = j * nx + i
-                
-                if j == 0:
-                    if mask[i, j] == True:
-                        # Dirichlet BCs if in fluid inlet
-                        A = A.at[index, index].set(1)
-                        b = b.at[index].set(1000)
-                    else:
-                        A = A.at[index, index].set(20 / 237 + 1 / dx)
-                        A = A.at[index, index + ny].set(20 / 237 - 1 / dx)
-                        b = b.at[index].set(400 / 237)  # h/k * air temp 20c room temp
-                
-                elif j == nx - 1:
-                    if mask[i, j] == True:
-                        # Fully thermally developed
-                        A = A.at[index, index].set(1 / dx)
-                        A = A.at[index, index - ny].set(-1 / dx)
-                        b = b.at[index].set(0)
-                    else:
-                        A = A.at[index, index].set(20 / 237 + 1 / dx)
-                        A = A.at[index, index - ny].set(20 / 237 - 1 / dx)
-                        b = b.at[index].set(400 / 237)  # h/k * air temp 20c room temp
-                
-                elif i == 0:
-                    # Bottom
-                    A = A.at[index, index].set(20 / 237 + 1 / dy)
-                    A = A.at[index, index + 1].set(20 / 237 - 1 / dy)
-                    b = b.at[index].set(400 / 237)
-                
-                elif i == nx - 1:
-                    # Top
-                    A = A.at[index, index].set(20 / 237 - 1 / dy)
-                    A = A.at[index, index - 1].set(20 / 237 + 1 / dy)
-                    b = b.at[index].set(400 / 237)
-        
+            index = j * nx + i
+            if mask[i, j]:
+                A = A.at[index, index].set(1)
+                b = b.at[index].set(1000)
+            else:
+                A = A.at[index, index].set(20 / 237 + 1 / dx)
+                A = A.at[index, index + ny].set(20 / 237 - 1 / dx)
+                b = b.at[index].set(400 / 237)
+    
+        # Right boundary (j == ny - 1)
+        j = ny - 1
+        for i in range(nx):
+            index = j * nx + i
+            if mask[i, j]:
+                A = A.at[index, index].set(1 / dx)
+                A = A.at[index, index - ny].set(-1 / dx)
+                b = b.at[index].set(0)
+            else:
+                A = A.at[index, index].set(20 / 237 + 1 / dx)
+                A = A.at[index, index - ny].set(20 / 237 - 1 / dx)
+                b = b.at[index].set(400 / 237)
+    
         return A, b
     
     def solve_steady_state(self, alpha_field, velocity_field_x, velocity_field_y, mask, nx, ny, dx, dy):
-        A = self.assemble_coefficients_matrix_vmapped(alpha_field, velocity_field_x, velocity_field_y, nx, ny, dx, dy)
-        b = jnp.zeros(nx * ny)
+        start_time = time.time()
+        A = jnp.zeros((nx * ny, nx * ny))
+        idx_range = jnp.arange(nx * ny)  # Create the range array outside the JIT-compiled function
+        A = self.assemble_coefficients_matrix_vmapped(A, alpha_field, velocity_field_x, velocity_field_y, nx, ny, dx, dy, idx_range)
+        b = jax.lax.stop_gradient(jnp.zeros(nx * ny))
+        end_time = time.time()
+        print(f"Matrix assembly time: {end_time - start_time} seconds")
+    
+        start_time = time.time()
         A, b = self.apply_boundary_conditions_vmapped(A, b, mask, nx, ny, dx, dy)
-        T = jax.numpy.linalg.solve(A, b).reshape((ny, nx)).T
+        A_sp = jax.experimental.sparse.csr_fromdense(A)
+        end_time = time.time()
+        print(f"bc+sparsify time: {end_time - start_time} seconds")
+    
+        start_time = time.time()
+        
+        T = jax.experimental.sparse.linalg.spsolve(A_sp.data,A_sp.indices,A_sp.indptr, b).reshape((ny, nx)).T
+        end_time = time.time()
+        print(f"solution time: {end_time - start_time} seconds")
         return T
