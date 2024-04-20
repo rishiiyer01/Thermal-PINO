@@ -8,7 +8,7 @@ import jax
 from functools import partial
 import os
 os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
-
+import multiprocessing
 import time
 
 
@@ -16,10 +16,8 @@ import time
 class Heat_eq_generation():
     def __init__(self, x_channel, y_channel, velocity_data, domain_size, grid_res):
         start_time=time.time()
-        
-        self.x_channel = jax.lax.stop_gradient(x_channel)
-        self.y_channel = jax.lax.stop_gradient(y_channel)
-        self.velocity_data=jax.lax.stop_gradient(velocity_data)
+        self.x_channel = x_channel
+        self.y_channel = y_channel
         coords_list = []
         for col in np.arange(x_channel.shape[1]):
             coords_list = coords_list + list(zip(x_channel[col, :], y_channel[col, :]))
@@ -49,7 +47,7 @@ class Heat_eq_generation():
         
         self.assemble_coefficients_matrix_vmapped = self.assemble_coefficients_matrix
         self.apply_boundary_conditions_vmapped = self.apply_boundary_conditions
-        #self.T = self.solve_steady_state(jax.lax.stop_gradient(alpha_field), jax.lax.stop_gradient(self.u[:,:,0]), jax.lax.stop_gradient(self.u[:,:,1]), jax.lax.stop_gradient(self.mask), nx, ny, self.dx, self.dy)
+        self.T = self.solve_steady_state(jax.lax.stop_gradient(alpha_field), jax.lax.stop_gradient(self.u[:,:,0]), jax.lax.stop_gradient(self.u[:,:,1]), jax.lax.stop_gradient(self.mask), nx, ny, self.dx, self.dy)
         
 
     def is_inside_channel(self, x, y):
@@ -214,6 +212,7 @@ class Heat_eq_generation():
     def solve_steady_state(self, alpha_field, velocity_field_x, velocity_field_y, mask, nx, ny, dx, dy):
         start_time = time.time()
         A = jnp.zeros((nx * ny, nx * ny))
+        A=jax.lax.stop_gradient(A)
         idx_range = jnp.arange(nx * ny)  # Create the range array outside the JIT-compiled function
         A = self.assemble_coefficients_matrix_vmapped(A, alpha_field, velocity_field_x, velocity_field_y, nx, ny, dx, dy, idx_range)
         b = jax.lax.stop_gradient(jnp.zeros(nx * ny))
@@ -256,42 +255,73 @@ INPUT=torch.stack((input_x,input_y),dim=1)
 print(INPUT.shape)
 velocities=torch.tensor(velocity_data)
 print(velocities.shape)
-data_loader = torch.utils.data.DataLoader(torch.utils.data.TensorDataset(INPUT, velocities), batch_size=2, shuffle=False)
-def compute_steady_state(heat_eq_obj):
-    return heat_eq_obj.solve_steady_state(
-        jax.lax.stop_gradient(heat_eq_obj.alpha_field),
-        jax.lax.stop_gradient(heat_eq_obj.u[:, :, 0]),
-        jax.lax.stop_gradient(heat_eq_obj.u[:, :, 1]),
-        jax.lax.stop_gradient(heat_eq_obj.mask),
-        jnp.array(heat_eq_obj.xgrid.shape[0]),
-        jnp.array(heat_eq_obj.xgrid.shape[1]),
-        jnp.array(heat_eq_obj.dx),  # Convert dx to a JAX array
-        jnp.array(heat_eq_obj.dy),  # Convert dy to a JAX array
-    )
-def build_kdtree(x_channel, y_channel):
-    coords_list = []
-    for col in np.arange(x_channel.shape[1]):
-        coords_list = coords_list + list(zip(x_channel[col, :], y_channel[col, :]))
-    coords = np.array(coords_list)
-    return KDTree(coords)
-for batch_input, batch_velocities in data_loader:
-    batch_size = batch_input.shape[0]
-    
-    # Extract the necessary inputs for each mesh in the batch
-    x_channels = batch_input[:, 0].numpy()
-    y_channels = batch_input[:, 1].numpy()
-    velocity_data = batch_velocities.numpy()
-    
-    # Assuming domain_size and grid_res are the same for all meshes
+#data_loader = torch.utils.data.DataLoader(torch.utils.data.TensorDataset(INPUT[:1000], velocities[:1000]), batch_size=1, shuffle=False)
+
+
+# Check if storage files exist, otherwise create new ones
+if os.path.exists('u_store.npy'):
+    u_store = torch.from_numpy(np.load('u_store.npy'))
+else:
+    u_store = torch.zeros_like(torch.stack((input_x, input_y), dim=1))
+
+if os.path.exists('xgrid_store.npy'):
+    xgrid_store = torch.from_numpy(np.load('xgrid_store.npy'))
+else:
+    xgrid_store = torch.zeros((1000, 1, 129, 129))
+
+if os.path.exists('ygrid_store.npy'):
+    ygrid_store = torch.from_numpy(np.load('ygrid_store.npy'))
+else:
+    ygrid_store = torch.zeros((1000, 1, 129, 129))
+
+if os.path.exists('mask_store.npy'):
+    mask_store = torch.from_numpy(np.load('mask_store.npy'))
+else:
+    mask_store = torch.zeros((1000, 1, 129, 129))
+
+if os.path.exists('p_store.npy'):
+    p_store = torch.from_numpy(np.load('p_store.npy'))
+else:
+    p_store = torch.zeros((1000, 1, 129, 129))
+
+if os.path.exists('T_store.npy'):
+    T_store = torch.from_numpy(np.load('T_store.npy'))
+else:
+    T_store = torch.zeros((1000, 1, 129, 129))
+
+# Parse command-line arguments
+parser = argparse.ArgumentParser()
+parser.add_argument('--start', type=int, required=True, help='Start index of the data subset')
+parser.add_argument('--end', type=int, required=True, help='End index of the data subset')
+args = parser.parse_args()
+
+start_index = args.start
+end_index = args.end
+
+for i in range(start_index, end_index):
+    x_channel = input_x[i].numpy()
+    y_channel = input_y[i].numpy()
+    velocity_data = velocities[i].numpy()
+
     domain_size = (10, 2.0)  # Example domain size
     grid_res = (100, 100)  # Example grid resolution
-    
-    # Create instances of Heat_eq_generation for each mesh in the batch
-    heat_eq_objs = [Heat_eq_generation(x, y, v, domain_size, grid_res) for x, y, v in zip(x_channels, y_channels, velocity_data)]
-    
-    # Convert the list of Heat_eq_generation objects to a JAX array
-    heat_eq_objs_array = jax.tree_util.tree_map(lambda x: x, heat_eq_objs)
-    
-    # Use jax.vmap to compute solve_steady_state batchwise
-    compute_steady_state_batch = jax.vmap(compute_steady_state)
-    results = compute_steady_state_batch(heat_eq_objs_array)
+
+    obj = Heat_eq_generation(x_channel, y_channel, velocity_data, domain_size, grid_res)
+    T = obj.solve_steady_state(obj.alpha_field, obj.u[:,:,0], obj.u[:,:,1], obj.mask, *grid_res, obj.dx, obj.dy)
+
+    xgrid_store[i] = obj.xgrid
+    ygrid_store[i] = obj.ygrid
+    T_store[i] = T
+    u_store[i] = obj.u
+    mask_store[i] = obj.mask
+    p_store[i] = obj.p
+
+# Save the updated storage files
+np.save('xgrid_store.npy', xgrid_store.numpy())
+np.save('ygrid_store.npy', ygrid_store.numpy())
+np.save('T_store.npy', T_store.numpy())
+np.save('u_store.npy', u_store.numpy())
+np.save('mask_store.npy', mask_store.numpy())
+np.save('p_store.npy', p_store.numpy())
+
+
