@@ -10,7 +10,7 @@ import os
 os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
 import multiprocessing
 import time
-
+import argparse
 
 #class for generating heat eq solution based on aluminum and liquid water inlet, bcs are not configurable at this stage
 class Heat_eq_generation():
@@ -40,14 +40,14 @@ class Heat_eq_generation():
         self.mask = self.map_channel_geometry(self.xgrid, self.ygrid)
         alpha_aluminum = 64 * 10**-6
         alpha_water = 0.143 * 10**-6
-        alpha_field = jnp.where(self.mask == True, alpha_water, alpha_aluminum)
+        self.alpha_field = jnp.where(self.mask == True, alpha_water, alpha_aluminum)
         end_time=time.time()
         print(f"Interpolation time: {end_time - start_time} seconds")
 
         
         self.assemble_coefficients_matrix_vmapped = self.assemble_coefficients_matrix
         self.apply_boundary_conditions_vmapped = self.apply_boundary_conditions
-        self.T = self.solve_steady_state(jax.lax.stop_gradient(alpha_field), jax.lax.stop_gradient(self.u[:,:,0]), jax.lax.stop_gradient(self.u[:,:,1]), jax.lax.stop_gradient(self.mask), nx, ny, self.dx, self.dy)
+        self.T = self.solve_steady_state(jax.lax.stop_gradient(self.alpha_field), jax.lax.stop_gradient(self.u[:,:,0]), jax.lax.stop_gradient(self.u[:,:,1]), jax.lax.stop_gradient(self.mask), nx, ny, self.dx, self.dy)
         
 
     def is_inside_channel(self, x, y):
@@ -259,35 +259,40 @@ print(velocities.shape)
 
 
 # Check if storage files exist, otherwise create new ones
-if os.path.exists('u_store.npy'):
-    u_store = torch.from_numpy(np.load('u_store.npy'))
+if os.path.exists('/home/iyer.ris/u_store.npy'):
+    u_store = np.load('/home/iyer.ris/u_store.npy')
 else:
-    u_store = torch.zeros_like(torch.stack((input_x, input_y), dim=1))
+    u_store = np.zeros((1000,50,50))
 
-if os.path.exists('xgrid_store.npy'):
-    xgrid_store = torch.from_numpy(np.load('xgrid_store.npy'))
+if os.path.exists('/home/iyer.ris/xgrid_store.npy'):
+    xgrid_store = np.load('/home/iyer.ris/xgrid_store.npy')
 else:
-    xgrid_store = torch.zeros((1000, 1, 129, 129))
+    xgrid_store = np.zeros((1000,50,50))
 
-if os.path.exists('ygrid_store.npy'):
-    ygrid_store = torch.from_numpy(np.load('ygrid_store.npy'))
+if os.path.exists('/home/iyer.ris/ygrid_store.npy'):
+    ygrid_store = np.load('/home/iyer.ris/ygrid_store.npy')
 else:
-    ygrid_store = torch.zeros((1000, 1, 129, 129))
+    ygrid_store = np.zeros((1000,50,50))
 
-if os.path.exists('mask_store.npy'):
-    mask_store = torch.from_numpy(np.load('mask_store.npy'))
+if os.path.exists('/home/iyer.ris/mask_store.npy'):
+    mask_store = np.load('/home/iyer.ris/mask_store.npy')
 else:
-    mask_store = torch.zeros((1000, 1, 129, 129))
+    mask_store = np.zeros((1000,50,50))
 
-if os.path.exists('p_store.npy'):
-    p_store = torch.from_numpy(np.load('p_store.npy'))
+if os.path.exists('/home/iyer.ris/p_store.npy'):
+    p_store = np.load('/home/iyer.ris/p_store.npy')
 else:
-    p_store = torch.zeros((1000, 1, 129, 129))
+    p_store = np.zeros((1000,50,50))
 
-if os.path.exists('T_store.npy'):
-    T_store = torch.from_numpy(np.load('T_store.npy'))
+if os.path.exists('/home/iyer.ris/T_store.npy'):
+    T_store = np.load('/home/iyer.ris/T_store.npy')
 else:
-    T_store = torch.zeros((1000, 1, 129, 129))
+    T_store = np.zeros((1000,50,50))
+
+if os.path.exists('/home/iyer.ris/v_store.npy'):
+    v_store=np.load('/home/iyer.ris/v_store.npy')
+else:
+    v_store=np.zeros((1000,50,50))
 
 # Parse command-line arguments
 parser = argparse.ArgumentParser()
@@ -304,24 +309,26 @@ for i in range(start_index, end_index):
     velocity_data = velocities[i].numpy()
 
     domain_size = (10, 2.0)  # Example domain size
-    grid_res = (100, 100)  # Example grid resolution
+    grid_res = (50, 50)  # Example grid resolution
 
     obj = Heat_eq_generation(x_channel, y_channel, velocity_data, domain_size, grid_res)
     T = obj.solve_steady_state(obj.alpha_field, obj.u[:,:,0], obj.u[:,:,1], obj.mask, *grid_res, obj.dx, obj.dy)
 
-    xgrid_store[i] = obj.xgrid
-    ygrid_store[i] = obj.ygrid
-    T_store[i] = T
-    u_store[i] = obj.u
-    mask_store[i] = obj.mask
-    p_store[i] = obj.p
+    xgrid_store[i,:,:] = obj.xgrid
+    ygrid_store[i,:,:] = obj.ygrid
+    T_store[i,:,:] = T
+    u_store[i,:,:] = obj.u[:,:,0]
+    v_store[i,:,:]=obj.u[:,:,1]
+    mask_store[i,:,:] = obj.mask
+    p_store[i,:,:] = obj.p
 
 # Save the updated storage files
-np.save('xgrid_store.npy', xgrid_store.numpy())
-np.save('ygrid_store.npy', ygrid_store.numpy())
-np.save('T_store.npy', T_store.numpy())
-np.save('u_store.npy', u_store.numpy())
-np.save('mask_store.npy', mask_store.numpy())
-np.save('p_store.npy', p_store.numpy())
+np.save('/home/iyer.ris/xgrid_store.npy', xgrid_store)
+np.save('/home/iyer.ris/ygrid_store.npy', ygrid_store)
+np.save('/home/iyer.ris/T_store.npy', T_store)
+np.save('/home/iyer.ris/u_store.npy', u_store)
+np.save('/home/iyer.ris/mask_store.npy', mask_store)
+np.save('/home/iyer.ris/p_store.npy', p_store)
+np.save('/home/iyer.ris/v_store.npy',v_store)
 
 
