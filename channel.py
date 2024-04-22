@@ -89,7 +89,7 @@ class FNO2d(nn.Module):
         self.width = width
         self.padding = 16 # pad the domain if input is non-periodic
 
-        self.fc0 = nn.Linear(4, self.width)  
+        self.fc0 = nn.Linear(5, self.width)  
         
         self.conv0 = SpectralConv2d(self.width, self.width, self.modes1, self.modes2)
         self.conv1 = SpectralConv2d(self.width, self.width, self.modes1, self.modes2)
@@ -176,11 +176,11 @@ class FNO2d(nn.Module):
 
 
 
-ntrain = 1000
-ntest = 200
-N = 1200
+ntrain = 400
+ntest = 100
+N = 500
 
-batch_size = 5
+batch_size = 2
 learning_rate = 0.001
 
 epochs = 501
@@ -188,61 +188,51 @@ step_size =5
 gamma = 0.5
 
 modes = 12
-width = 24
+width = 8
 
 r1 = 1
 r2 = 1
-s1 = int(((100 - 1) / r1) + 1)
-s2 = int(((100 - 1) / r2) + 1)
+s1 = int(((50 - 1) / r1) + 1)
+s2 = int(((50 - 1) / r2) + 1)
 
-inputX = np.load('/home/iyer.ris/inputx.npy')
-#inputX = torch.tensor(inputX, dtype=torch.float)
-inputY = np.load('/home/iyer.ris/inputy.npy')
+inputX = np.load('/home/iyer.ris/xgrid_store.npy')
+inputX = torch.tensor(inputX, dtype=torch.float)
+inputY = np.load('/home/iyer.ris/ygrid_store.npy')
+inputY = torch.tensor(inputY, dtype=torch.float)
 diameter = 1.0  # pipe diameter
 radius = diameter / 2.0  # pipe radius
-num_points = 100  # number of grid points
-# Generate evenly spaced points in the Y dimension
-y_values = np.linspace(-radius, radius, num_points)
-x_values=np.linspace(0,10,num_points)
-# Repeat these points in the X dimension
-#inputY = torch.tensor(inputY, dtype=torch.float)
-#Y_data1 = np.tile(y_values, (num_points, 1))
-Y_data1 = np.repeat(inputY[np.newaxis, :, :], 2310, axis=0)
-inputX=torch.tensor(np.repeat(inputX[np.newaxis, :, :], 2310, axis=0))
-inputY = torch.tensor(Y_data1, dtype=torch.float)
+num_points = 50  # number of grid points
+input_mask=torch.tensor(np.load('/home/iyer.ris/mask_store.npy'),dtype=torch.float)
 
 
-input = torch.stack([inputX, inputY], dim=-1)
+input = torch.stack([inputX, inputY,input_mask], dim=-1)
+print(input.shape,'inputshape')
+output1=torch.tensor(np.load('/home/iyer.ris/u_store.npy'),dtype=torch.float)
+output2=torch.tensor(np.load('/home/iyer.ris/v_store.npy'),dtype=torch.float)
+output3 = torch.tensor(np.load('/home/iyer.ris/p_store.npy'),dtype=torch.float)
+output4 = torch.tensor(np.load('/home/iyer.ris/T_store.npy'),dtype=torch.float)
 
-output1 = np.load('/home/iyer.ris/outputv.npy')
-output1 = torch.tensor(np.repeat(output1[np.newaxis, :, :], 2310, axis=0))
-output2 = np.load('/home/iyer.ris/outputp.npy')
-output2 = torch.tensor(np.repeat(output2[np.newaxis, :, :], 2310, axis=0))
-output2=torch.unsqueeze(output2,axis=-1)
-output3 = np.load('/home/iyer.ris/outputT.npy')
-output3 = torch.tensor(np.repeat(output3[np.newaxis, :, :], 2310, axis=0))
-output3=torch.unsqueeze(output3,axis=-1)
 print("Shape of output1:", output1.shape)
 print("Shape of output2:", output2.shape)
 print("Shape of output3:", output3.shape)
-output_stacked = torch.stack([output2, output3], dim=3).squeeze()
-print(output_stacked.shape)
-output = torch.cat([output1, output_stacked], dim=3)
+output=torch.stack([output1,output2,output3,output4],dim=-1)
+
+
 print(output.shape,input.shape)
 
 x_train = input[:N][:ntrain, ::r1, ::r2][:, :s1, :s2]
 y_train = output[:N][:ntrain, ::r1, ::r2][:, :s1, :s2]
 x_test = input[:N][-ntest:, ::r1, ::r2][:, :s1, :s2]
 y_test = output[:N][-ntest:, ::r1, ::r2][:, :s1, :s2]
-x_train = x_train.reshape(ntrain, s1, s2, 2)
-x_test = x_test.reshape(ntest, s1, s2, 2)
+x_train = x_train.reshape(ntrain, s1, s2, 3)
+x_test = x_test.reshape(ntest, s1, s2, 3)
 
 train_loader = torch.utils.data.DataLoader(torch.utils.data.TensorDataset(x_train, y_train), batch_size=batch_size,
                                            shuffle=True)
 test_loader = torch.utils.data.DataLoader(torch.utils.data.TensorDataset(x_test, y_test), batch_size=batch_size,
                                           shuffle=False)
-test_loader2 = torch.utils.data.DataLoader(torch.utils.data.TensorDataset(x_test, y_test), batch_size=1,
-                                          shuffle=False)
+#test_loader2 = torch.utils.data.DataLoader(torch.utils.data.TensorDataset(x_test, y_test), batch_size=1,
+                                        #  shuffle=False)
 
 model = FNO2d(modes, modes, width).to(device)
 print(count_params(model))
@@ -263,33 +253,41 @@ for ep in range(epochs):
     for x, y in train_loader:
         x, y = x.to(device), y.to(device)
         x.requires_grad = True
-        
         optimizer.zero_grad()
         u, v, p, T = model(x)
+        print(x.shape)
         
-        # Concatenate the model outputs along the last dimension
+        # Mask the u, v, and p values where mask is 0
+        u = torch.where(mask.unsqueeze(-1) == 0, 0, u)
+        v = torch.where(mask.unsqueeze(-1) == 0, 0, v)
+        p = torch.where(mask.unsqueeze(-1) == 0, 0, p)
+        
+        # Concatenate the masked model outputs along the last dimension
         output = torch.cat((u, v, p, T), dim=-1)
         
         loss = myloss(output.view(batch_size, -1), y.view(batch_size, -1))
         loss.backward()
-        
         optimizer.step()
         train_l2 += loss.item()
-    
     scheduler.step()
     
     model.eval()
     test_l2 = 0.0
-    
     for x, y in test_loader:
         x, y = x.to(device), y.to(device)
-        x.requires_grad = True
-        u, v, p, T = model(x)
-        
-        # Concatenate the model outputs along the last dimension
-        output = torch.cat((u, v, p, T), dim=-1)
-        
-        test_l2 += myloss(output.view(batch_size, -1), y.view(batch_size, -1)).item()
+        with torch.no_grad():
+            u, v, p, T = model(x)
+            
+            # Mask the u, v, and p values where mask is 0
+            mask = x[:, :, :, 2]  # Assuming the mask is in the third channel of x
+            u = torch.where(mask.unsqueeze(-1) == 0, 0, u)
+            v = torch.where(mask.unsqueeze(-1) == 0, 0, v)
+            p = torch.where(mask.unsqueeze(-1) == 0, 0, p)
+            
+            # Concatenate the masked model outputs along the last dimension
+            output = torch.cat((u, v, p, T), dim=-1)
+            
+            test_l2 += myloss(output.view(batch_size, -1), y.view(batch_size, -1)).item()
     
     train_l2 /= ntrain
     test_l2 /= ntest
