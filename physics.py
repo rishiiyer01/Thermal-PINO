@@ -582,6 +582,15 @@ class physicsLossPaper(nn.Module):
         
         #print(L)
         return L
+#class boundaryLoss(nn.module):
+ #   def __init__(self,model, alpha=(0.143*10**-6), beta=(1/1000), nu=0.000001):
+ #       super(physicsLossFVM, self).__init__()
+ #       
+ #       self.model = model
+ #   def forward(self,mask,x,y):
+        
+        
+
 
 class physicsLossFVM(nn.Module):
     def __init__(self,model, alpha=(0.143*10**-6), beta=(1/1000), nu=0.000001):
@@ -903,7 +912,36 @@ class LpLoss(object):
         return diff_norms/y_norms
 
     def __call__(self, x, y):
-        return self.rel(x, y)  # Use absolute error instead of relative error
+        return self.rel(x, y)  
+class VeloLoss(object):
+    def __init__(self, d=2, p=2, size_average=True, reduction=True):
+        super(VeloLoss, self).__init__()
+        # Dimension and Lp-norm type are positive
+        assert d > 0 and p > 0
+        self.d = d
+        self.p = p
+        self.reduction = reduction
+        self.size_average = size_average
+
+    def rel(self, x, y, mask):
+        num_examples = x.size()[0]
+        
+        # Compute the difference only for the fluid domain points (where mask == 1)
+        diff = torch.where(mask.unsqueeze(-1) == 1, x - y, torch.zeros_like(x))
+        
+        # Compute the Lp-norm of the difference
+        diff_norms = torch.norm(diff.reshape(num_examples, -1), self.p, 1)
+        
+        if self.reduction:
+            if self.size_average:
+                return torch.mean(diff_norms)
+            else:
+                return torch.sum(diff_norms)
+        
+        return diff_norms
+
+    def __call__(self, x, y, mask):
+        return self.rel(x, y, mask)
 
 # A simple feedforward neural network
 class DenseNet(torch.nn.Module):
