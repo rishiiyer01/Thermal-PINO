@@ -65,7 +65,6 @@ class SpectralConv2d(nn.Module):
         
         return x
 
-
 class FNO2d(nn.Module):
     def __init__(self, modes1, modes2, width):
         super(FNO2d, self).__init__()
@@ -88,7 +87,7 @@ class FNO2d(nn.Module):
         self.width = width
         self.padding = 16 # pad the domain if input is non-periodic
 
-        self.fc0 = nn.Linear(4, self.width)  
+        self.fc0 = nn.Linear(5, self.width)  
         
         self.conv0 = SpectralConv2d(self.width, self.width, self.modes1, self.modes2)
         self.conv1 = SpectralConv2d(self.width, self.width, self.modes1, self.modes2)
@@ -101,12 +100,16 @@ class FNO2d(nn.Module):
         self.w3 = nn.Conv2d(self.width, self.width, 1)
         self.w4=nn.Conv2d(self.width,self.width,1)
 
-        self.fc1 = nn.Linear(self.width, 256)
+        self.fc1 = nn.Linear(self.width, self.width)
         #self.fc2 = nn.Linear(128, 3)
-        self.fc_u = nn.Linear(256, 1)
-        self.fc_v = nn.Linear(256, 1)
-        self.fc_p = nn.Linear(256, 1)
-        self.fc_T = nn.Linear(256, 1)
+        self.fc_u1 = nn.Linear(self.width, 64)
+        self.fc_v1 = nn.Linear(self.width, 64)
+        self.fc_p1 = nn.Linear(self.width, 64)
+        self.fc_T1 = nn.Linear(self.width, 64)
+        self.fc_u2= nn.Linear(64,1)
+        self.fc_v2= nn.Linear(64,1)
+        self.fc_p2= nn.Linear(64,1)
+        self.fc_T2= nn.Linear(64,1)
 
     def forward(self, x):
         grid = self.get_grid(x.shape, x.device)
@@ -150,10 +153,14 @@ class FNO2d(nn.Module):
         x23 = F.gelu(x22)
         #x = self.fc2(x)
         #print(x.device)
-        u = self.fc_u(x23)
-        v = self.fc_v(x23)
-        p = self.fc_p(x23)
-        T = self.fc_T(x23)
+        u1 = self.fc_u1(x23)
+        v1 = self.fc_v1(x23)
+        p1 = self.fc_p1(x23)
+        T1 = self.fc_T1(x23)
+        u=self.fc_u2(u1)
+        v=self.fc_v2(v1)
+        p=self.fc_p2(p1)
+        T=self.fc_T2(T1)
         #print(x.is_leaf)
         
         return u,v,p,T
@@ -165,3 +172,4 @@ class FNO2d(nn.Module):
         gridy = torch.tensor(np.linspace(0, 1, size_y), dtype=torch.float)
         gridy = gridy.reshape(1, 1, size_y, 1).repeat([batchsize, size_x, 1, 1])
         return torch.cat((gridx, gridy), dim=-1).to(device)
+
