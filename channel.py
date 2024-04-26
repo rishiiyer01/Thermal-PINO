@@ -1,4 +1,4 @@
-
+import wandb
 import os
 #os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
 #THIS CODE IS NOT FULLY OPERATIONAL
@@ -21,9 +21,49 @@ np.random.seed(0)
 torch.cuda.manual_seed(0)
 torch.backends.cudnn.deterministic = True
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-################################################################
-# fourier layer
-################################################################
+
+
+
+
+class SpectralAttention(nn.Module):
+    def __init__(self, in_channels, out_channels, modes1, modes2):
+        super(SpectralAttention, self).__init__()
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.modes1 = modes1
+        self.modes2 = modes2
+
+        self.query = SpectralConv2d(in_channels, out_channels, modes1, modes2)
+        self.key = SpectralConv2d(in_channels, out_channels, modes1, modes2)
+        self.value = SpectralConv2d(in_channels, out_channels, modes1, modes2)
+        self.softmax = nn.Softmax(dim=-1)
+
+    def forward(self, x):
+        # Compute query, key, and value
+        query = self.query(x)
+        key = self.key(x)
+        value = self.value(x)
+
+        # Reshape query, key, and value for matrix multiplication
+        query = query.permute(0, 2, 3, 1)
+        key = key.permute(0, 2, 3, 1)
+        value = value.permute(0, 2, 3, 1)
+
+        # Compute spectral attention scores
+        scores = torch.matmul(query, key.transpose(-2, -1))
+        scores = scores / math.sqrt(self.out_channels)
+        attention_weights = self.softmax(scores)
+
+        # Apply attention weights to values
+        attended_value = torch.matmul(attention_weights, value)
+
+        # Reshape the attended value back to the original shape
+        attended_value = attended_value.permute(0, 3, 1, 2)
+
+        return attended_value
+
+
+
 class SpectralConv2d(nn.Module):
     def __init__(self, in_channels, out_channels, modes1, modes2):
         super(SpectralConv2d, self).__init__()
@@ -102,12 +142,16 @@ class FNO2d(nn.Module):
         self.w3 = nn.Conv2d(self.width, self.width, 1)
         self.w4=nn.Conv2d(self.width,self.width,1)
 
-        self.fc1 = nn.Linear(self.width, 256)
+        self.fc1 = nn.Linear(self.width, self.width)
         #self.fc2 = nn.Linear(128, 3)
-        self.fc_u = nn.Linear(256, 1)
-        self.fc_v = nn.Linear(256, 1)
-        self.fc_p = nn.Linear(256, 1)
-        self.fc_T = nn.Linear(256, 1)
+        self.fc_u1 = nn.Linear(self.width, 64)
+        self.fc_v1 = nn.Linear(self.width, 64)
+        self.fc_p1 = nn.Linear(self.width, 64)
+        self.fc_T1 = nn.Linear(self.width, 64)
+        self.fc_u2= nn.Linear(64,1)
+        self.fc_v2= nn.Linear(64,1)
+        self.fc_p2= nn.Linear(64,1)
+        self.fc_T2= nn.Linear(64,1)
 
     def forward(self, x):
         grid = self.get_grid(x.shape, x.device)
@@ -151,10 +195,14 @@ class FNO2d(nn.Module):
         x23 = F.gelu(x22)
         #x = self.fc2(x)
         #print(x.device)
-        u = self.fc_u(x23)
-        v = self.fc_v(x23)
-        p = self.fc_p(x23)
-        T = self.fc_T(x23)
+        u1 = self.fc_u1(x23)
+        v1 = self.fc_v1(x23)
+        p1 = self.fc_p1(x23)
+        T1 = self.fc_T1(x23)
+        u=self.fc_u2(u1)
+        v=self.fc_v2(v1)
+        p=self.fc_p2(p1)
+        T=self.fc_T2(T1)
         #print(x.is_leaf)
         
         return u,v,p,T
@@ -183,12 +231,12 @@ N = 500
 batch_size = 2
 learning_rate = 0.001
 
-epochs = 501
+epochs = 70
 step_size =5
 gamma = 0.5
 
-modes = 12
-width = 8
+modes = 24 #12,36
+width = 128 #8,24
 
 r1 = 1
 r2 = 1
@@ -246,17 +294,30 @@ scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=step_size, gamm
 myloss = LpLoss(size_average=False)
 #physics_loss = PhysicsLossFFT(model).to(device)
 #physics_loss=PhysicsLoss(model).to(device)
+run = wandb.init(
+    # Set the project where this run will be logged
+    project="FNO with Mask with 128 embedding dimwidth",
+    # Track hyperparameters and run metadata
+    config={
+        "learning_rate": learning_rate,
+        "epochs": epochs,
+        "width": width,
+        "modes": modes,
+    },
+)
+
 for ep in range(epochs):
     model.train()
     t1 = default_timer()
     train_l2 = 0
+    train_mse=0
     for x, y in train_loader:
         x, y = x.to(device), y.to(device)
         x.requires_grad = True
         optimizer.zero_grad()
         u, v, p, T = model(x)
-        print(x.shape)
         
+        mask = x[:, :, :, 2]  # Assuming the mask is in the third channel of x
         # Mask the u, v, and p values where mask is 0
         u = torch.where(mask.unsqueeze(-1) == 0, 0, u)
         v = torch.where(mask.unsqueeze(-1) == 0, 0, v)
@@ -264,11 +325,22 @@ for ep in range(epochs):
         
         # Concatenate the masked model outputs along the last dimension
         output = torch.cat((u, v, p, T), dim=-1)
-        
-        loss = myloss(output.view(batch_size, -1), y.view(batch_size, -1))
+        # Compute the loss for u, v, and P only in the fluid domain
+        uvp_loss = VeloLoss()(torch.cat((u, v, p), dim=-1), y[..., :3], mask)
+        loss = 0.5*uvp_loss+0.5*myloss(T.view(batch_size, -1), y[..., 3].view(batch_size, -1))
         loss.backward()
         optimizer.step()
         train_l2 += loss.item()
+        # Calculate MSE
+        train_mse += F.mse_loss(output, y).item()
+
+    # Calculate average MSE for the epoch
+    train_mse /= len(train_loader)
+
+    
+   
+
+    
     scheduler.step()
     
     model.eval()
@@ -287,15 +359,18 @@ for ep in range(epochs):
             # Concatenate the masked model outputs along the last dimension
             output = torch.cat((u, v, p, T), dim=-1)
             
-            test_l2 += myloss(output.view(batch_size, -1), y.view(batch_size, -1)).item()
+            uvp_loss = VeloLoss()(torch.cat((u, v, p), dim=-1), y[..., :3], mask)
+            
+            test_l2 += 0.5*uvp_loss+0.5*myloss(T.view(batch_size, -1), y[..., 3].view(batch_size, -1))
     
     train_l2 /= ntrain
     test_l2 /= ntest
-    
+    wandb.log({"accuracy":train_mse, "loss": train_l2})
+    wandb.log({ "testloss": test_l2})
     t2 = default_timer()
     print(ep, t2 - t1, train_l2, test_l2)
     
     if ep % step_size == 0:
-        torch.save(model, '/home/iyer.ris/pipe/pipemodelrun_' + str(ep))
+        torch.save(model, '/home/iyer.ris/pipe/chtFNO_' + str(ep))
 
 
