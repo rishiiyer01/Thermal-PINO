@@ -216,7 +216,7 @@ class FNO2d(nn.Module):
         x18 = self.w3(x16)
         x19 = x17 + x18
         x19=F.gelu(x19)
-        xnew=self.conv4(x19)
+        xnew=self.conv5(x19)
         
         xnew2=self.w4(x19)
         xnew3=xnew+xnew2
@@ -269,7 +269,7 @@ step_size =5
 gamma = 0.5
 
 modes = 24 #12,36
-width = 128 #8,24
+width = 128 
 
 r1 = 1
 r2 = 1
@@ -360,7 +360,8 @@ for ep in range(epochs):
         output = torch.cat((u, v, p, T), dim=-1)
         # Compute the loss for u, v, and P only in the fluid domain
         uvp_loss = VeloLoss()(torch.cat((u, v, p), dim=-1), y[..., :3], mask)
-        loss = 0.5*uvp_loss+0.5*myloss(T.view(batch_size, -1), y[..., 3].view(batch_size, -1))
+        #loss = 0.5*uvp_loss+0.5*myloss(T.view(batch_size, -1), y[..., 3].view(batch_size, -1))
+        loss=myloss(output.view(batch_size,-1),y.view(batch_size,-1))
         loss.backward()
         optimizer.step()
         train_l2 += loss.item()
