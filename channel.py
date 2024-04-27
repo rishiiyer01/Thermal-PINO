@@ -33,36 +33,65 @@ class SpectralAttention(nn.Module):
         self.modes1 = modes1
         self.modes2 = modes2
 
-        self.query = SpectralConv2d(in_channels, out_channels, modes1, modes2)
-        self.key = SpectralConv2d(in_channels, out_channels, modes1, modes2)
-        self.value = SpectralConv2d(in_channels, out_channels, modes1, modes2)
-        self.softmax = nn.Softmax(dim=-1)
+        self.query = nn.Conv2d(in_channels, out_channels, 1)
+        self.key = nn.Conv2d(in_channels, out_channels, 1)
+        self.value = nn.Conv2d(in_channels, out_channels, 1)
+        self.softmax = ComplexSoftmax()
+
 
     def forward(self, x):
+        """
+        inputs :
+            x : input feature maps (B, C, W, H)
+        returns :
+            out : self attention value + input feature
+            attention: (B, N, N) (N is W*H)
+        """
+        batch_size, C, width, height = x.size()
         # Compute query, key, and value
+        
         query = self.query(x)
         key = self.key(x)
         value = self.value(x)
 
-        # Reshape query, key, and value for matrix multiplication
-        query = query.permute(0, 2, 3, 1)
-        key = key.permute(0, 2, 3, 1)
-        value = value.permute(0, 2, 3, 1)
-
+        # Apply Fourier transform
+        query_ft = torch.fft.rfft2(query)
+        key_ft = torch.fft.rfft2(key)
+        value_ft = torch.fft.rfft2(value)
+        query_ftcompressed=query_ft[:,:,:self.modes1,:self.modes2]
+        key_ftcompressed=key_ft[:,:,:self.modes1,:self.modes2]
+        value_ftcompressed=value_ft[:,:,:self.modes1,:self.modes2]
+        batch_size,c,freq1,freq2=value_ftcompressed.size()
         # Compute spectral attention scores
-        scores = torch.matmul(query, key.transpose(-2, -1))
-        scores = scores / math.sqrt(self.out_channels)
-        attention_weights = self.softmax(scores)
-
+        
+        query_ftcompressed = query_ftcompressed.reshape(batch_size, -1, freq1 *freq2).permute(0, 2, 1)
+        key_ftcompressed = key_ftcompressed.reshape(batch_size, -1, freq1 *freq2)
+        value_ftcompressed=value_ftcompressed.reshape(batch_size,-1,freq1*freq2).permute(0, 2, 1)
+        s = torch.matmul(query_ftcompressed,key_ftcompressed)
+        
+        s=self.softmax(s)
         # Apply attention weights to values
-        attended_value = torch.matmul(attention_weights, value)
+        attended_value_ft = torch.matmul(s,value_ftcompressed).permute(0,2,1)
+        attended_value_ft=attended_value_ft.reshape(batch_size, self.out_channels, freq1, freq2)
+        # Inverse Fourier transform
+        attended_values = torch.fft.irfft2(attended_value_ft,s=(x.size(-2), x.size(-1)))
+        
+        return attended_values
 
-        # Reshape the attended value back to the original shape
-        attended_value = attended_value.permute(0, 3, 1, 2)
 
-        return attended_value
+class ComplexSoftmax(nn.Module):
+    def __init__(self, use_phase=True):
+        super(ComplexSoftmax,self).__init__()
+        # act can be either a function from nn.functional or a nn.Module if the
+        # activation has learnable parameters
+        self.act = nn.Softmax(dim=-1)
+        self.use_phase = use_phase
 
-
+    def forward(self, z):
+        if self.use_phase:
+            return self.act(torch.abs(z)) * torch.exp(1.j * torch.angle(z)) 
+        else:
+            return self.act(z.real) + 1.j * self.act(z.imag)
 
 class SpectralConv2d(nn.Module):
     def __init__(self, in_channels, out_channels, modes1, modes2):
@@ -136,6 +165,8 @@ class FNO2d(nn.Module):
         self.conv2 = SpectralConv2d(self.width, self.width, self.modes1, self.modes2)
         self.conv3 = SpectralConv2d(self.width, self.width, self.modes1, self.modes2)
         self.conv4 = SpectralConv2d(self.width, self.width, self.modes1, self.modes2)
+        #self.conv4=SpectralAttention(self.width, self.width, self.modes1, self.modes2)
+        self.conv5=SpectralAttention(self.width, self.width, self.modes1, self.modes2)
         self.w0 = nn.Conv2d(self.width, self.width, 1)
         self.w1 = nn.Conv2d(self.width, self.width, 1)
         self.w2 = nn.Conv2d(self.width, self.width, 1)
@@ -186,6 +217,7 @@ class FNO2d(nn.Module):
         x19 = x17 + x18
         x19=F.gelu(x19)
         xnew=self.conv4(x19)
+        
         xnew2=self.w4(x19)
         xnew3=xnew+xnew2
 
@@ -195,10 +227,11 @@ class FNO2d(nn.Module):
         x23 = F.gelu(x22)
         #x = self.fc2(x)
         #print(x.device)
-        u1 = self.fc_u1(x23)
-        v1 = self.fc_v1(x23)
-        p1 = self.fc_p1(x23)
-        T1 = self.fc_T1(x23)
+        u1 =F.gelu( self.fc_u1(x23))
+        v1 = F.gelu(self.fc_v1(x23))
+        p1 = F.gelu(self.fc_p1(x23))
+        T1 = F.gelu(self.fc_T1(x23))
+        
         u=self.fc_u2(u1)
         v=self.fc_v2(v1)
         p=self.fc_p2(p1)
@@ -296,7 +329,7 @@ myloss = LpLoss(size_average=False)
 #physics_loss=PhysicsLoss(model).to(device)
 run = wandb.init(
     # Set the project where this run will be logged
-    project="FNO with Mask with 128 embedding dimwidth",
+    project="FNO with Mask with physics informed boundary loss",
     # Track hyperparameters and run metadata
     config={
         "learning_rate": learning_rate,
@@ -360,7 +393,6 @@ for ep in range(epochs):
             output = torch.cat((u, v, p, T), dim=-1)
             
             uvp_loss = VeloLoss()(torch.cat((u, v, p), dim=-1), y[..., :3], mask)
-            
             test_l2 += 0.5*uvp_loss+0.5*myloss(T.view(batch_size, -1), y[..., 3].view(batch_size, -1))
     
     train_l2 /= ntrain
