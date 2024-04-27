@@ -3,3 +3,4 @@ This is a fully executable training code for an augmented Fourier Neural Operato
 If not, please use some of the OpenFOAM functionality to generate data.
 
 Full model was trained on a single NVIDIA p100 15 gb node. 
+Paper coming soon.
